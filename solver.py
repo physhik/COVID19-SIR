@@ -86,7 +86,7 @@ def parse_arguments():
     if args.countries != "":
         try:
             countries_raw = args.countries
-            country_list = countries_raw.split(",")
+            country_list.append(countries_raw)
         except Exception:
             sys.exit("QUIT: countries parameter is not on CSV format")
     else:
