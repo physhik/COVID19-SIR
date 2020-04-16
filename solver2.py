@@ -2,7 +2,7 @@
 import numpy as np
 import pandas as pd
 from scipy.integrate import solve_ivp
-from scipy.optimize import minimize
+from scipy.optimize import minimize, differential_evolution
 import matplotlib.pyplot as plt
 from datetime import timedelta, datetime
 import argparse
@@ -14,7 +14,7 @@ import urllib.request
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
-    
+
     parser.add_argument(
         '--countries',
         action='store',
@@ -24,7 +24,7 @@ def parse_arguments():
         metavar='COUNTRY_CSV',
         type=str,
         default="")
-    
+
     parser.add_argument(
         '--download-data',
         action='store_true',
@@ -43,15 +43,6 @@ def parse_arguments():
         metavar='START_DATE',
         type=str,
         default="1/22/20")
-    
-    parser.add_argument(
-        '--over-lap',
-        required=False,
-        action='store',
-        dest='over_lap',
-        metavar='OVER_LAP',
-        type=str,
-        default="10")    
 
     parser.add_argument(
         '--prediction-days',
@@ -65,11 +56,11 @@ def parse_arguments():
     parser.add_argument(
         '--S_0',
         required=False,
-        dest='s_0',
+        dest='guess_s_0',
         help='S_0. Defaults to 100000',
         metavar='S_0',
         type=int,
-        default=100000)
+        default=15000)
 
     parser.add_argument(
         '--I_0',
@@ -101,7 +92,7 @@ def parse_arguments():
     else:
         sys.exit("QUIT: You must pass a country list on CSV format.")
 
-    return (country_list, args.download_data, args.start_date, args.over_lap, args.predict_range, args.s_0, args.i_0, args.r_0)
+    return (country_list, args.download_data, args.start_date, args.predict_range, args.guess_s_0, args.i_0, args.r_0)
 
 
 def remove_province(input_file, output_file):
@@ -132,13 +123,12 @@ def load_json(json_file_str):
 
 
 class Learner(object):
-    def __init__(self, country, loss, start_date, over_lap, predict_range, i_0, r_0):
+    def __init__(self, country, loss, start_date, predict_range, guess_s_0, i_0, r_0):
         self.country = country
         self.loss = loss
         self.start_date = start_date
-        self.over_lap = over_lap
         self.predict_range = predict_range
-        #self.s_0 = s_0
+        self.guess_s_0 = guess_s_0
         self.i_0 = i_0
         self.r_0 = r_0
 
@@ -159,7 +149,7 @@ class Learner(object):
         df = pd.read_csv('data/time_series_19-covid-Deaths-country.csv')
         country_df = df[df['Country/Region'] == country]
         return country_df.iloc[0].loc[self.start_date:]
-    
+
 
     def extend_index(self, index, new_size):
         values = index.values
@@ -172,23 +162,40 @@ class Learner(object):
     def predict(self, beta, gamma, data, recovered, death, country, s_0, i_0, r_0):
         new_index = self.extend_index(data.index, self.predict_range)
         size = len(new_index)
-        print("size:",len(data), size)
         def SIR(t, y):
             S = y[0]
             I = y[1]
             R = y[2]
             return [-beta*S*I, beta*S*I-gamma*I, gamma*I]
         extended_actual = np.concatenate((data.values, [None] * (size - len(data.values))))
-        extended_recovered = np.concatenate((recovered.values, [None] * (size - len(recovered.valuesptitle(self.country)
+        extended_recovered = np.concatenate((recovered.values, [None] * (size - len(recovered.values))))
+        extended_death = np.concatenate((death.values, [None] * (size - len(death.values))))
+        return new_index, extended_actual, extended_recovered, extended_death, solve_ivp(SIR, [0, size], [s_0,i_0,r_0], t_eval=np.arange(0, size, 1))
+
+
+    def train(self):
+        recovered = self.load_recovered(self.country)
+        death = self.load_dead(self.country)
+        data = (self.load_confirmed(self.country) - recovered - death)
+
+        initial_guess = [15000, 0.001, 0.001]
+        bounds=[(16500, 16501),(0.0001, 0.01), (0.0001, 0.1)]
+
+        optimal = differential_evolution(loss, bounds = bounds, args=(data, recovered, self.i_0, self.r_0))
+        print(optimal)
+        s_0, beta, gamma = optimal.x
+        new_index, extended_actual, extended_recovered, extended_death, prediction = self.predict(beta, gamma, data, recovered, death, self.country, s_0, self.i_0, self.r_0)
+        df = pd.DataFrame({'Infected data': extended_actual, 'Recovered data': extended_recovered, 'Death data': extended_death, 'Susceptible': prediction.y[0], 'Infected': prediction.y[1], 'Recovered': prediction.y[2]}, index=new_index)
+        fig, ax = plt.subplots(figsize=(15, 10))
+        ax.set_title(self.country)
         df.plot(ax=ax)
-        print(f"country={self.country}, beta={beta:.8f}, gamma={gamma:.8f}, r_0:{(beta/gamma):.8f}")
-        fig.savefig(f"{self.country}.png")
+        print(f"country={self.country}, s_0={s_0:.8f}, beta={beta:.8f}, gamma={gamma:.8f}, r_0:{(beta/gamma):.8f}")
+        fig.savefig(f"{self.country}-2.png")
 
 
 def loss(point, data, recovered, i_0, r_0):
     size = len(data)
-    gamma , s_0 = point
-    beta = 1/30
+    s_0, beta, gamma = point
     def SIR(t, y):
         S = y[0]
         I = y[1]
@@ -198,12 +205,14 @@ def loss(point, data, recovered, i_0, r_0):
     l1 = np.sqrt(np.mean((solution.y[1] - data)**2))
     l2 = np.sqrt(np.mean((solution.y[2] - recovered)**2))
     alpha = 0.1
-    return alpha * l1 + (1 - alpha) * l2
+    result  = alpha * l1 + (1 - alpha) * l2
+    print(s_0, beta, gamma, result)
+    return result
 
 
 def main():
 
-    countries, download, startdate, overlap, predict_range , i_0, r_0 = parse_arguments()
+    countries, download, startdate, predict_range , s_0, i_0, r_0 = parse_arguments()
 
     if download:
         data_d = load_json("./data_url.json")
@@ -214,33 +223,14 @@ def main():
     remove_province('data/time_series_19-covid-Deaths.csv', 'data/time_series_19-covid-Deaths-country.csv')
 
     for country in countries:
-        learner = Learner(country, loss, startdate, overlap, predict_range, i_0, r_0)
+        learner = Learner(country, loss, startdate, predict_range, s_0, i_0, r_0)
         #try:
         learner.train()
         #except BaseException:
         #    print('WARNING: Problem processing ' + str(country) +
         #        '. Be sure it exists in the data exactly as you entry it.' +
         #        ' Also check date format if you passed it as parameter.')
-           ], death[:-over_lap], data[:-over_lap]
-        
-        estimated_s0 = 10000
-        optimal = minimize(loss, [0.001, estimated_s0], args=(data[:-10], recovered[:-10], self.i_0, self.r_0), method='L-BFGS-B', bounds=[(0.00000001, 1), (estimated_s0/2, estimated_s0*2)])
-        print(optimal)
-        beta = 1/30
-        gamma, s_0 = optimal.x
-        new_index, extended_actual, extended_recovered, extended_death, prediction = self.predict(beta, gamma, data[:-10], recovered[:-10], death[:-10], self.country, s_0, self.i_0, self.r_0)
-        df = pd.DataFrame({'Infected data': extended_actual, 'Recovered data': extended_recovered, 'Death data': extended_death, 'Susceptible': prediction.y[0], 'Infected': prediction.y[1], 'Recovered': prediction.y[2]}, index=new_index)
-        fig, ax = plt.subplots(figsize=(15, 10))
-        ax.set_)))
-        extended_death = np.concatenate((death.values, [None] * (size - len(death.values))))
-        print(data.values[-1])
-        #return new_index, extended_actual, extended_recovered, extended_death, solve_ivp(SIR, [0, size], [s_0,i_0,r_0], t_eval=np.arange(0, size, 1))
-        return new_index, extended_actual, extended_recovered, extended_death, solve_ivp(SIR, [14, size], [s_0-data.values[-1],data.values[-1]+recovered.values[-1]+death.values[-1],recovered.values[-1]], t_eval=np.arange(14, size, 1))
 
 
-    def train(self):
-        recovered = self.load_recovered(self.country)
-        death = self.load_dead(self.country)
-        data = (self.load_confirmed(self.country) - recovered - death)
-        
-        recovered, death, data = recovered[:-over_la)
+if __name__ == '__main__':
+    main()

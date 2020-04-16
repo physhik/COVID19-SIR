@@ -2,7 +2,7 @@
 import numpy as np
 import pandas as pd
 from scipy.integrate import solve_ivp
-from scipy.optimize import minimize
+from scipy.optimize import minimize, brute, fmin
 import matplotlib.pyplot as plt
 from datetime import timedelta, datetime
 import argparse
@@ -56,11 +56,11 @@ def parse_arguments():
     parser.add_argument(
         '--S_0',
         required=False,
-        dest='s_0',
+        dest='guess_s_0',
         help='S_0. Defaults to 100000',
         metavar='S_0',
         type=int,
-        default=100000)
+        default=15000)
 
     parser.add_argument(
         '--I_0',
@@ -92,7 +92,7 @@ def parse_arguments():
     else:
         sys.exit("QUIT: You must pass a country list on CSV format.")
 
-    return (country_list, args.download_data, args.start_date, args.predict_range, args.s_0, args.i_0, args.r_0)
+    return (country_list, args.download_data, args.start_date, args.predict_range, args.guess_s_0, args.i_0, args.r_0)
 
 
 def remove_province(input_file, output_file):
@@ -123,12 +123,12 @@ def load_json(json_file_str):
 
 
 class Learner(object):
-    def __init__(self, country, loss, start_date, predict_range,s_0, i_0, r_0):
+    def __init__(self, country, loss, start_date, predict_range, guess_s_0, i_0, r_0):
         self.country = country
         self.loss = loss
         self.start_date = start_date
         self.predict_range = predict_range
-        self.s_0 = s_0
+        self.guess_s_0 = guess_s_0
         self.i_0 = i_0
         self.r_0 = r_0
 
@@ -178,32 +178,42 @@ class Learner(object):
         death = self.load_dead(self.country)
         data = (self.load_confirmed(self.country) - recovered - death)
 
-        optimal = minimize(loss, [0.001, 0.001], args=(data, recovered, self.s_0, self.i_0, self.r_0), method='L-BFGS-B', bounds=[(0.00000001, 0.4), (0.00000001, 0.4)])
-        print(optimal)
-        beta, gamma = optimal.x
-        new_index, extended_actual, extended_recovered, extended_death, prediction = self.predict(beta, gamma, data, recovered, death, self.country, self.s_0, self.i_0, self.r_0)
+        initial_guess = [15000, 0.001, 0.001]
+        bounds=[(10000, 20000),(0.00001, 0.0001), (0.01, 0.4)]
+
+        i_0, r_0 = max(data[0],1), max(recovered[0],1)
+        print(i_0, r_0)
+
+        rranges = (slice(bounds[0][0], bounds[0][1], 1000), slice(bounds[1][0], bounds[1][1], 0.00001), slice(bounds[2][0], bounds[2][1], 0.01))
+        optimal = brute(loss, rranges, args=(data, recovered, i_0, r_0), full_output=True, finish=fmin)
+
+        print(optimal[0])
+        print(optimal[1])
+        print(optimal[2].shape)
+
+        s_0, beta, gamma = optimal[0]
+        new_index, extended_actual, extended_recovered, extended_death, prediction = self.predict(beta, gamma, data, recovered, death, self.country, s_0, i_0, r_0)
         df = pd.DataFrame({'Infected data': extended_actual, 'Recovered data': extended_recovered, 'Death data': extended_death, 'Susceptible': prediction.y[0], 'Infected': prediction.y[1], 'Recovered': prediction.y[2]}, index=new_index)
         fig, ax = plt.subplots(figsize=(15, 10))
         ax.set_title(self.country)
         df.plot(ax=ax)
-        print(f"country={self.country}, beta={beta:.8f}, gamma={gamma:.8f}, r_0:{(beta/gamma):.8f}")
+        print(f"country={self.country}, s_0={s_0:.8f}, beta={beta:.8f}, gamma={gamma:.8f}, r_0:{(beta/gamma):.8f}")
         fig.savefig(f"{self.country}.png")
 
-def loss(point, data, recovered, s_0, i_0, r_0):
+
+
+
+def loss(point, data, recovered, i_0, r_0):
     size = len(data)
-    beta, gamma = point
+    s_0, beta, gamma = point
     def SIR(t, y):
         S = y[0]
         I = y[1]
         R = y[2]
         return [-beta*S*I, beta*S*I-gamma*I, gamma*I]
     solution = solve_ivp(SIR, [0, size], [s_0,i_0,r_0], t_eval=np.arange(0, size, 1), vectorized=True)
-
-    #data = (data - data.mean())/data.std()
-    #recovered = (recovered - data.mean())/recovered.std()
-    l1 = np.sqrt(np.mean((solution.y[2] - recovered)**2))
-
-    return l1
+    result  = np.sqrt(np.sqrt(np.mean((solution.y[2] - recovered)**2+(solution.y[1] - data)**2)))
+    return result
 
 
 def main():
