@@ -45,13 +45,12 @@ def parse_arguments():
         default=30)
 
     parser.add_argument(
-        '--S_0',
+        '--idx',
         required=False,
-        dest='guess_s_0',
-        help='S_0. Defaults to 100000',
-        metavar='S_0',
+        dest='idx',
+        metavar='idx',
         type=int,
-        default=15000)
+        default=None)
 
     parser.add_argument(
         '--I_0',
@@ -83,7 +82,7 @@ def parse_arguments():
 
     args = parser.parse_args()
 
-    return ( args.download_data, args.start_date, args.predict_range, args.guess_s_0, args.i_0, args.r_0, args.d_0)
+    return ( args.download_data, args.start_date, args.predict_range, args.idx, args.i_0, args.r_0, args.d_0)
 
 
 def remove_province(input_file, output_file):
@@ -114,11 +113,11 @@ def load_json(json_file_str):
 
 
 class Learner(object):
-    def __init__(self, loss, start_date, predict_range, guess_s_0, i_0, r_0, d_0):
+    def __init__(self, loss, start_date, predict_range, idx, i_0, r_0, d_0):
         self.loss = loss
         self.start_date = start_date
         self.predict_range = predict_range
-        self.guess_s_0 = guess_s_0
+        self.idx = idx
         self.i_0 = i_0
         self.r_0 = r_0
         self.d_0 = d_0
@@ -176,8 +175,11 @@ class Learner(object):
             recovered = recovered[:84]
             data = confirmed.values - recovered.values - death.values
 
-            idx  = next((i for i, x in enumerate(confirmed.values) if x), None)
-            idx = min(71, idx)
+            if self.idx ==None or country == 'China':
+                idx  = next((i for i, x in enumerate(confirmed.values) if x), None)
+            else:
+                idx = max(self.idx, next((i for i, x in enumerate(confirmed.values) if x), None))
+            idx = min(71, idx) #84-13 = 84-43+30
             s0_guess = max(confirmed.values)
             s0_guess = max(s0_guess, 1000)
             bounds=[(s0_guess*2/3, s0_guess*4/3),(0.00001, 0.0001), (0.001, 0.01), (0.001, 0.01)]
@@ -213,9 +215,9 @@ class Learner(object):
             #print(f"country={country}, s_0={s_0:.8f}, beta={beta:.8f}, gamma={gamma:.8f}, r_0:{(beta/gamma):.8f}, mu={mu:.8f}")
             fig.savefig(f"{country}-{province}.png")
         sub = sub.astype(int)
-        sub.to_csv('data/submission.csv')
+        sub.to_csv(f'data/submission-{idx}.csv')
         coef_df = pd.DataFrame.from_dict(dict)
-        coef_df.to_csv('data/coef-provinces.csv')
+        coef_df.to_csv(f'data/coef-provinces-{idx}.csv')
 
 
 
@@ -236,7 +238,7 @@ def loss(point, data, recovered, death, i_0, r_0, d_0):
 
 def main():
 
-    download, startdate, predict_range , s_0, i_0, r_0, d_0 = parse_arguments()
+    download, startdate, predict_range , idx, i_0, r_0, d_0 = parse_arguments()
 
     if download:
         data_d = load_json("./data_url.json")
@@ -244,7 +246,7 @@ def main():
 
 
 
-    learner = Learner(loss, startdate, predict_range, s_0, i_0, r_0, d_0)
+    learner = Learner(loss, startdate, predict_range, idx, i_0, r_0, d_0)
     learner.train()
         #except BaseException:
         #    print('WARNING: Problem processing ' + str(country) +
