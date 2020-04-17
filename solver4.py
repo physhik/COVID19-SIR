@@ -121,6 +121,7 @@ class Learner(object):
         self.i_0 = i_0
         self.r_0 = r_0
         self.d_0 = d_0
+        self.end = True
 
 
 
@@ -147,6 +148,21 @@ class Learner(object):
         extended_death = np.concatenate((death.values, [None] * (size - len(death.values))))
         return new_index, extended_actual, extended_recovered, extended_death, solve_ivp(SIRD, [0, size], [s_0,i_0,r_0, d_0], t_eval=np.arange(0, size, 1))
 
+
+    def predict_end(self, beta, gamma, mu, data, recovered, death, s_0, idx):
+        new_index = self.extend_index(recovered.index, self.predict_range+84-idx-1)
+        size = len(new_index)
+        def SIRD(t, y):
+            S = y[0]
+            I = y[1]
+            R = y[2]
+            D = y[3]
+            return [-beta*S*I, beta*S*I-gamma*I - mu * I , gamma*I, mu*I ]
+        extended_actual = np.concatenate((data, [None] * (size - len(data))))
+        extended_recovered = np.concatenate((recovered.values, [None] * (size - len(recovered.values))))
+        extended_death = np.concatenate((death.values, [None] * (size - len(death.values))))
+        s1 = s_0 +data[0] + recovered.values[0] + death.values[0] - data[-1]- recovered.values[-1]- death.values[-1]
+        return new_index, extended_actual, extended_recovered, extended_death, solve_ivp(SIRD, [84-1, 84-1+self.predict_range], [s1, data[-1],recovered.values[-1], death.values[-1]], t_eval=np.arange(84-1, 84-1+self.predict_range, 1))
 
     def train(self):
         df = pd.read_csv('data/train.csv')
@@ -192,21 +208,29 @@ class Learner(object):
 
 
             mu = max(mu, 0) # death rate can't be negative
-            new_index, extended_actual, extended_recovered, extended_death, prediction = self.predict(beta, gamma, mu, data[idx:], recovered[idx:], death[idx:], s_0, i_0, r_0, d_0, idx)
-
-
-            sub.ConfirmedCases[i*43:(i+1)*43] = [round(e) for e in (prediction.y[1][-43:] + prediction.y[2][-43:]+ prediction.y[3][-43:])]
-            sub.Fatalities[i*43:(i+1)*43] = [round(e) for e in (prediction.y[3][-43:])]
-            plot_df = pd.DataFrame({'Infected data': extended_actual, 'Recovered data': extended_recovered, 'Death data': extended_death, 'Susceptible': prediction.y[0], 'Infected': prediction.y[1], 'Recovered': prediction.y[2], 'Death': prediction.y[3]}, index=new_index)
+            if self.end:
+                new_index, extended_actual, extended_recovered, extended_death, prediction = self.predict_end(beta, gamma, mu, data[idx:], recovered[idx:], death[idx:], s_0, idx)
+                sub.ConfirmedCases[i*43 + 13:(i+1)*43] = [round(e) for e in (prediction.y[1] + prediction.y[2]+ prediction.y[3])]
+                sub.Fatalities[i*43 + 13:(i+1)*43] = [round(e) for e in (prediction.y[3])]
+            else:
+                new_index, extended_actual, extended_recovered, extended_death, prediction = self.predict(beta, gamma, mu, data[idx:], recovered[idx:], death[idx:], s_0, i_0, r_0, d_0, idx)
+                sub.ConfirmedCases[i*43:(i+1)*43] = [round(e) for e in (prediction.y[1][-43:] + prediction.y[2][-43:]+ prediction.y[3][-43:])]
+                sub.Fatalities[i*43:(i+1)*43] = [round(e) for e in (prediction.y[3][-43:])]
+            size = len(new_index)
+            predicted_susceptible = np.concatenate(([None] * (size-len(prediction.y[0])), prediction.y[0]))
+            predicted_infected = np.concatenate(([None] * ( size-len(prediction.y[1])), prediction.y[1]))
+            predicted_recovered = np.concatenate(([None] * ( size-len(prediction.y[2])), prediction.y[2]))
+            predicted_death = np.concatenate(([None] * ( size-len(prediction.y[3])), prediction.y[3]))
+            plot_df = pd.DataFrame({'Infected data': extended_actual, 'Recovered data': extended_recovered, 'Death data': extended_death, 'Susceptible': predicted_susceptible, 'Infected': predicted_infected , 'Recovered': predicted_recovered, 'Death': predicted_death}, index=new_index)
             fig, ax = plt.subplots(figsize=(15, 10))
             ax.set_title(country)
             plot_df.plot(ax=ax)
             #print(f"country={country}, s_0={s_0:.8f}, beta={beta:.8f}, gamma={gamma:.8f}, r_0:{(beta/gamma):.8f}, mu={mu:.8f}")
             fig.savefig(f"{country}.png")
         sub = sub.astype(int)
-        sub.to_csv(f'data/submission-{idx}.csv')
+        sub.to_csv(f'data/submission.csv')
         coef_df = pd.DataFrame.from_dict(dict)
-        coef_df.to_csv(f'data/coef-{idx}.csv')
+        coef_df.to_csv(f'data/coef.csv')
 
 
 
@@ -221,7 +245,16 @@ def loss(point, data, recovered, death, i_0, r_0, d_0):
         D = y[3]
         return [-beta*S*I, beta*S*I-gamma*I - mu*I , gamma*I, mu*I ]
     solution = solve_ivp(SIRD, [0, size], [s_0,i_0,r_0,d_0], t_eval=np.arange(0, size, 1), vectorized=True)
-    result  = np.sqrt(np.sqrt(np.mean((solution.y[2] - recovered)**2+(solution.y[1] - data)**2+(solution.y[3]-death)**2)))
+    #result  = np.sqrt(np.sqrt(np.mean((solution.y[2] - recovered)**2+(solution.y[1] - data)**2+(solution.y[3]-death)**2)))
+    W = 0.8
+    X = [(solution.y[1] - data), W*(solution.y[2] - recovered), (solution.y[3] - death)]
+    mid = size//3
+
+    result = 0
+    for x in X:
+        Y = [x[:mid], x[mid:mid*2], x[2*mid:]]
+        result += sum([sum(Y[w]**2*(w+1)) for w in range(len(Y))])/6/size
+    result = np.sqrt(np.sqrt(result))
     return result
 
 
