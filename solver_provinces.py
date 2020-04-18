@@ -7,22 +7,12 @@ import matplotlib.pyplot as plt
 from datetime import timedelta, datetime
 import argparse
 import sys
-import json
 import ssl
 import urllib.request
 import math
 
-
 def parse_arguments():
     parser = argparse.ArgumentParser()
-
-    parser.add_argument(
-        '--download-data',
-        action='store_true',
-        dest='download_data',
-        help='Download fresh data and then run',
-        default=False
-    )
 
     parser.add_argument(
         '--start-date',
@@ -70,7 +60,6 @@ def parse_arguments():
         type=int,
         default=1)
 
-
     parser.add_argument(
         '--D_0',
         required=False,
@@ -82,35 +71,7 @@ def parse_arguments():
 
     args = parser.parse_args()
 
-    return ( args.download_data, args.start_date, args.predict_range, args.idx, args.i_0, args.r_0, args.d_0)
-
-
-def remove_province(input_file, output_file):
-    input = open(input_file, "r")
-    output = open(output_file, "w")
-    output.write(input.readline())
-    for line in input:
-        if line.lstrip().startswith(","):
-            output.write(line)
-    input.close()
-    output.close()
-
-
-def download_data(url_dictionary):
-    #Lets download the files
-    for url_title in url_dictionary.keys():
-        urllib.request.urlretrieve(url_dictionary[url_title], "./data/" + url_title)
-
-
-def load_json(json_file_str):
-    # Loads  JSON into a dictionary or quits the program if it cannot.
-    try:
-        with open(json_file_str, "r") as json_file:
-            json_variable = json.load(json_file)
-            return json_variable
-    except Exception:
-        sys.exit("Cannot open JSON file: " + json_file_str)
-
+    return (  args.start_date, args.predict_range, args.idx, args.i_0, args.r_0, args.d_0)
 
 class Learner(object):
     def __init__(self, loss, start_date, predict_range, idx, i_0, r_0, d_0):
@@ -122,9 +83,6 @@ class Learner(object):
         self.r_0 = r_0
         self.d_0 = d_0
         self.end = True
-
-
-
 
     def extend_index(self, index, new_size):
         values = index.values
@@ -148,7 +106,6 @@ class Learner(object):
         extended_death = np.concatenate((death.values, [None] * (size - len(death.values))))
         return new_index, extended_actual, extended_recovered, extended_death, solve_ivp(SIRD, [0, size], [s_0,i_0,r_0, d_0], t_eval=np.arange(0, size, 1))
 
-
     def predict_end(self, beta, gamma, mu, data, recovered, death, s_0, idx):
         new_index = self.extend_index(recovered.index, self.predict_range+84-idx-1)
         size = len(new_index)
@@ -167,12 +124,7 @@ class Learner(object):
     def train(self):
         df = pd.read_csv('data/train.csv')
         rec = pd.read_csv('data/time_series_19-covid-Recovered.csv')
-        province_countries = {'Australia',
- 'China',
- 'Denmark',
- 'France',
- 'Netherlands',
- 'United Kingdom'}
+        province_countries = {'Australia','China','Denmark','France','Netherlands','United Kingdom'}
         sub = pd.read_csv('data/submission.csv')
         dict = {}
         for i in range(313):
@@ -187,6 +139,7 @@ class Learner(object):
                 recovered = recovered[recovered['Province/State'].isnull()]
             else:
                 recovered = recovered[recovered['Province/State']==province]
+
             recovered = recovered.iloc[0].loc[self.start_date:]
             recovered = recovered[:84]
             data = confirmed.values - recovered.values - death.values
@@ -243,9 +196,6 @@ class Learner(object):
         coef_df = pd.DataFrame.from_dict(dict)
         coef_df.to_csv(f'data/coef-provinces.csv')
 
-
-
-
 def loss(point, data, recovered, death, i_0, r_0, d_0):
     size = len(data)
     s_0, beta, gamma, mu = point
@@ -268,15 +218,9 @@ def loss(point, data, recovered, death, i_0, r_0, d_0):
     result = np.sqrt(np.sqrt(result))
     return result
 
-
 def main():
 
-    download, startdate, predict_range , idx, i_0, r_0, d_0 = parse_arguments()
-
-    if download:
-        data_d = load_json("./data_url.json")
-        download_data(data_d)
-
+    startdate, predict_range , idx, i_0, r_0, d_0 = parse_arguments()
 
 
     learner = Learner(loss, startdate, predict_range, idx, i_0, r_0, d_0)
@@ -285,7 +229,6 @@ def main():
         #    print('WARNING: Problem processing ' + str(country) +
         #        '. Be sure it exists in the data exactly as you entry it.' +
         #        ' Also check date format if you passed it as parameter.')
-
 
 if __name__ == '__main__':
     main()

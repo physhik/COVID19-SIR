@@ -9,7 +9,10 @@ import argparse
 import sys
 import ssl
 import urllib.request
-import math
+#import time
+from tqdm import tqdm
+import ray
+ray.init()
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
@@ -126,16 +129,35 @@ class Learner(object):
         rec = pd.read_csv('data/time_series_19-covid-Recovered.csv')
         province_countries = set(df.Country_Region[df.Province_State.notna()])
         sub = pd.read_csv('data/submission.csv')
+        total = df.groupby(['Country_Region','Date']).sum()
         dict = {}
+        Args = []
         for i in range(313):
-          country = df.loc[i*84].Country_Region
-          print(country)
-          if country not in province_countries:
+            country = df.loc[i*84].Country_Region
+            province =  df.loc[i*84].Province_State
+            #print(country, province)
             confirmed = df[i*84:(i+1)*84].ConfirmedCases
             death = df[i*84:(i+1)*84].Fatalities
             recovered = rec[rec['Country/Region'] == country]
-            recovered = recovered.iloc[0].loc[self.start_date:]
-            recovered = recovered[:84]
+            if country not in province_countries:
+                recovered = recovered.iloc[0].loc[self.start_date:]
+                recovered = recovered[:84]
+            elif country in ['US', 'Canada']:
+                recovered = recovered.iloc[0].loc[self.start_date:]
+                recovered = recovered[:84]
+                total_confirmed = total.loc[country].ConfirmedCases.values
+                sr = sum(recovered.values)
+                for j in range(84):
+                    recovered[j] = int(confirmed.values[j]*sr/sum(total_confirmed))
+            else:
+                if isinstance(df.loc[i*84].Province_State, float):
+                    recovered = recovered[recovered['Province/State'].isnull()]
+                    recovered = recovered.iloc[0].loc[self.start_date:]
+                    recovered = recovered[:84]
+                else:
+                    recovered = recovered[recovered['Province/State']==province]
+                    recovered = recovered.iloc[0].loc[self.start_date:]
+                    recovered = recovered[:84]
             data = confirmed.values - recovered.values - death.values
 
             if self.idx == None:
@@ -149,22 +171,30 @@ class Learner(object):
 
             i_0, r_0, d_0 = max(data[idx],1), recovered[idx], death.values[idx]
             #i_0, r_0, d_0 = max(data[idx],1), max(recovered[idx],1), max(death.values[idx],1)
-            print(idx, i_0, r_0, d_0)
+            #print(idx, i_0, r_0, d_0)
 
             rranges = (slice(bounds[0][0], bounds[0][1], s0_guess/5), slice(bounds[1][0], bounds[1][1], 0.00001), slice(bounds[2][0], bounds[2][1], 0.001), slice(bounds[3][0], bounds[3][1], 0.001))
-            optimal = brute(loss, rranges, args=(data[idx:], recovered.values[idx:], death.values[idx:], i_0, r_0, d_0), full_output=True, finish=fmin)
+            brute_args = (loss, rranges, (data[idx:], recovered.values[idx:], death.values[idx:], i_0, r_0, d_0))
+            Args.append(Brute.remote(brute_args))
+        #start = time.time()
+        Optimal = ray.get(Args)
+        #with Pool() as p:
+        #    Optimal = p.imap(Brute, Args)
+        #end = time.time()
+        #print("brute time: ", end-start)
 
-            print("optimized s_0, beta, gamma, mu :", optimal[0])
-            print("mse:", optimal[1])
-            print(optimal[2].shape)
-
+        for i in tqdm(range(313)):
+            optimal = Optimal[i]
             s_0, beta, gamma, mu = optimal[0]
-
-
+            #optimal = brute(loss, rranges, args=(data[idx:], recovered.values[idx:], death.values[idx:], i_0, r_0, d_0), full_output=True, finish=fmin)
+            #print("optimized s_0, beta, gamma, mu :", optimal[0])
+            #print("mse:", optimal[1])
+            #print(optimal[2].shape)
             dict[country] = [s_0, beta, gamma, mu, optimal[1], optimal[1]/confirmed.values[-1]]
 
 
             mu = max(mu, 0) # death rate can't be negative
+            #start = time.time()
             if self.end:
                 new_index, extended_actual, extended_recovered, extended_death, prediction = self.predict_end(beta, gamma, mu, data[idx:], recovered[idx:], death[idx:], s_0, idx)
                 sub.ConfirmedCases[i*43 + 13:(i+1)*43] = [round(e) for e in (prediction.y[1] + prediction.y[2]+ prediction.y[3])]
@@ -173,21 +203,29 @@ class Learner(object):
                 new_index, extended_actual, extended_recovered, extended_death, prediction = self.predict(beta, gamma, mu, data[idx:], recovered[idx:], death[idx:], s_0, i_0, r_0, d_0, idx)
                 sub.ConfirmedCases[i*43:(i+1)*43] = [round(e) for e in (prediction.y[1][-43:] + prediction.y[2][-43:]+ prediction.y[3][-43:])]
                 sub.Fatalities[i*43:(i+1)*43] = [round(e) for e in (prediction.y[3][-43:])]
-            size = len(new_index)
-            predicted_susceptible = np.concatenate(([None] * (size-len(prediction.y[0])), prediction.y[0]))
-            predicted_infected = np.concatenate(([None] * ( size-len(prediction.y[1])), prediction.y[1]))
-            predicted_recovered = np.concatenate(([None] * ( size-len(prediction.y[2])), prediction.y[2]))
-            predicted_death = np.concatenate(([None] * ( size-len(prediction.y[3])), prediction.y[3]))
-            plot_df = pd.DataFrame({'Infected data': extended_actual, 'Recovered data': extended_recovered, 'Death data': extended_death, 'Susceptible': predicted_susceptible, 'Infected': predicted_infected , 'Recovered': predicted_recovered, 'Death': predicted_death}, index=new_index)
-            fig, ax = plt.subplots(figsize=(15, 10))
-            ax.set_title(country)
-            plot_df.plot(ax=ax)
+            #end = time.time()
+            #print("predict time: ", end-start)
+            #size = len(new_index)
+            #predicted_susceptible = np.concatenate(([None] * (size-len(prediction.y[0])), prediction.y[0]))
+            #predicted_infected = np.concatenate(([None] * ( size-len(prediction.y[1])), prediction.y[1]))
+            #predicted_recovered = np.concatenate(([None] * ( size-len(prediction.y[2])), prediction.y[2]))
+            #predicted_death = np.concatenate(([None] * ( size-len(prediction.y[3])), prediction.y[3]))
+            #plot_df = pd.DataFrame({'Infected data': extended_actual, 'Recovered data': extended_recovered, 'Death data': extended_death, 'Susceptible': predicted_susceptible, 'Infected': predicted_infected , 'Recovered': predicted_recovered, 'Death': predicted_death}, index=new_index)
+            #fig, ax = plt.subplots(figsize=(15, 10))
+            #ax.set_title(country)
+            #plot_df.plot(ax=ax)
             #print(f"country={country}, s_0={s_0:.8f}, beta={beta:.8f}, gamma={gamma:.8f}, r_0:{(beta/gamma):.8f}, mu={mu:.8f}")
-            fig.savefig(f"{country}.png")
+            #fig.savefig(f"{country}.png")
         sub = sub.astype(int)
         sub.to_csv(f'data/submission.csv')
         coef_df = pd.DataFrame.from_dict(dict)
         coef_df.to_csv(f'data/coef.csv')
+
+@ray.remote
+def Brute(Args):
+    f, x, a = Args
+    optimal = brute(f, x, args = a, full_output=True, finish=fmin)
+    return optimal
 
 def loss(point, data, recovered, death, i_0, r_0, d_0):
     size = len(data)

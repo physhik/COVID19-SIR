@@ -7,22 +7,12 @@ import matplotlib.pyplot as plt
 from datetime import timedelta, datetime
 import argparse
 import sys
-import json
 import ssl
 import urllib.request
 import math
 
-
 def parse_arguments():
     parser = argparse.ArgumentParser()
-
-    parser.add_argument(
-        '--download-data',
-        action='store_true',
-        dest='download_data',
-        help='Download fresh data and then run',
-        default=False
-    )
 
     parser.add_argument(
         '--start-date',
@@ -70,7 +60,6 @@ def parse_arguments():
         type=int,
         default=1)
 
-
     parser.add_argument(
         '--D_0',
         required=False,
@@ -82,35 +71,7 @@ def parse_arguments():
 
     args = parser.parse_args()
 
-    return ( args.download_data, args.start_date, args.predict_range, args.idx, args.i_0, args.r_0, args.d_0)
-
-
-def remove_province(input_file, output_file):
-    input = open(input_file, "r")
-    output = open(output_file, "w")
-    output.write(input.readline())
-    for line in input:
-        if line.lstrip().startswith(","):
-            output.write(line)
-    input.close()
-    output.close()
-
-
-def download_data(url_dictionary):
-    #Lets download the files
-    for url_title in url_dictionary.keys():
-        urllib.request.urlretrieve(url_dictionary[url_title], "./data/" + url_title)
-
-
-def load_json(json_file_str):
-    # Loads  JSON into a dictionary or quits the program if it cannot.
-    try:
-        with open(json_file_str, "r") as json_file:
-            json_variable = json.load(json_file)
-            return json_variable
-    except Exception:
-        sys.exit("Cannot open JSON file: " + json_file_str)
-
+    return ( args.start_date, args.predict_range, args.idx, args.i_0, args.r_0, args.d_0)
 
 class Learner(object):
     def __init__(self, loss, start_date, predict_range, idx, i_0, r_0, d_0):
@@ -122,9 +83,6 @@ class Learner(object):
         self.r_0 = r_0
         self.d_0 = d_0
         self.end = True
-
-
-
 
     def extend_index(self, index, new_size):
         values = index.values
@@ -148,7 +106,6 @@ class Learner(object):
         extended_death = np.concatenate((death.values, [None] * (size - len(death.values))))
         return new_index, extended_actual, extended_recovered, extended_death, solve_ivp(SIRD, [0, size], [s_0,i_0,r_0, d_0], t_eval=np.arange(0, size, 1))
 
-
     def predict_end(self, beta, gamma, mu, data, recovered, death, s_0, idx):
         new_index = self.extend_index(recovered.index, self.predict_range+84-idx-1)
         size = len(new_index)
@@ -163,7 +120,6 @@ class Learner(object):
         extended_death = np.concatenate((death.values, [None] * (size - len(death.values))))
         s1 = s_0 +data[0] + recovered.values[0] + death.values[0] - data[-1]- recovered.values[-1]- death.values[-1]
         return new_index, extended_actual, extended_recovered, extended_death, solve_ivp(SIRD, [84-1, 84-1+self.predict_range], [s1, data[-1],recovered.values[-1], death.values[-1]], t_eval=np.arange(84-1, 84-1+self.predict_range, 1))
-
 
     def train(self):
         df = pd.read_csv('data/train.csv')
@@ -182,9 +138,9 @@ class Learner(object):
             confirmed = df[i*84:(i+1)*84].ConfirmedCases
             death = df[i*84:(i+1)*84].Fatalities
             recovered = rec[rec['Country/Region'] == country]
+
             recovered = recovered.iloc[0].loc[self.start_date:]
             recovered = recovered[:84]
-            temp = []
             total_confirmed = total.loc[country].ConfirmedCases.values
             sr = sum(recovered.values)
 
@@ -200,7 +156,7 @@ class Learner(object):
             idx = min(71, idx)
 
 
-            s0_guess = max(confirmed.values)//1000*1000
+            s0_guess = max(confirmed.values)
             s0_guess = max(s0_guess, 1000)
             bounds=[(int(s0_guess/2), int(s0_guess*2)),(0.00001, 0.0001), (0.001, 0.01), (0.001, 0.01)]
 
@@ -245,9 +201,6 @@ class Learner(object):
         coef_df = pd.DataFrame.from_dict(dict)
         coef_df.to_csv(f'data/coef-Namerica.csv')
 
-
-
-
 def loss(point, data, recovered, death, i_0, r_0, d_0):
     size = len(data)
     s_0, beta, gamma, mu = point
@@ -269,15 +222,9 @@ def loss(point, data, recovered, death, i_0, r_0, d_0):
     result = np.sqrt(np.sqrt(result))
     return result
 
-
 def main():
 
-    download, startdate, predict_range , idx, i_0, r_0, d_0 = parse_arguments()
-
-    if download:
-        data_d = load_json("./data_url.json")
-        download_data(data_d)
-
+    startdate, predict_range , idx, i_0, r_0, d_0 = parse_arguments()
 
 
     learner = Learner(loss, startdate, predict_range, idx, i_0, r_0, d_0)
@@ -286,7 +233,6 @@ def main():
         #    print('WARNING: Problem processing ' + str(country) +
         #        '. Be sure it exists in the data exactly as you entry it.' +
         #        ' Also check date format if you passed it as parameter.')
-
 
 if __name__ == '__main__':
     main()
