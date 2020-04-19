@@ -9,10 +9,13 @@ import argparse
 import sys
 import ssl
 import urllib.request
-#import time
+import time
+from multiprocessing import Pool
 from tqdm import tqdm
 import ray
-ray.init()
+import gc
+
+#ray.init()
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
@@ -135,7 +138,6 @@ class Learner(object):
         for i in range(313):
             country = df.loc[i*84].Country_Region
             province =  df.loc[i*84].Province_State
-            #print(country, province)
             confirmed = df[i*84:(i+1)*84].ConfirmedCases
             death = df[i*84:(i+1)*84].Fatalities
             recovered = rec[rec['Country/Region'] == country]
@@ -160,7 +162,7 @@ class Learner(object):
                     recovered = recovered[:84]
             data = confirmed.values - recovered.values - death.values
 
-            if self.idx == None:
+            if self.idx == None or country == 'China':
                 idx  = next((i for i, x in enumerate(confirmed.values) if x), None)
             else:
                 idx = max(self.idx, next((i for i, x in enumerate(confirmed.values) if x), None) )
@@ -175,13 +177,25 @@ class Learner(object):
 
             rranges = (slice(bounds[0][0], bounds[0][1], s0_guess/5), slice(bounds[1][0], bounds[1][1], 0.00001), slice(bounds[2][0], bounds[2][1], 0.001), slice(bounds[3][0], bounds[3][1], 0.001))
             brute_args = (loss, rranges, (data[idx:], recovered.values[idx:], death.values[idx:], i_0, r_0, d_0))
-            Args.append(Brute.remote(brute_args))
-        #start = time.time()
-        Optimal = ray.get(Args)
-        #with Pool() as p:
-        #    Optimal = p.imap(Brute, Args)
-        #end = time.time()
-        #print("brute time: ", end-start)
+            #Args.append(Brute.remote(brute_args))
+            Args.append(brute_args)
+
+        #Optimal = ray.get(Args)
+
+        Optimal = []
+        for i in tqdm(range(40)):
+            #gc.disable()
+            with Pool() as p:
+                start = time.time()
+                n = 8
+                optimal = p.map(Brute, Args[n*i:min((i+1)*n, 313)])
+                end = time.time()
+                print("brute time: ", end-start)
+                Optimal += optimal
+                #p.close()
+                #p.terminate()
+            #gc.enable()
+
 
         for i in tqdm(range(313)):
             optimal = Optimal[i]
@@ -190,6 +204,7 @@ class Learner(object):
             #print("optimized s_0, beta, gamma, mu :", optimal[0])
             #print("mse:", optimal[1])
             #print(optimal[2].shape)
+            country = df.loc[i*84].Country_Region
             dict[country] = [s_0, beta, gamma, mu, optimal[1], optimal[1]/confirmed.values[-1]]
 
 
@@ -221,7 +236,7 @@ class Learner(object):
         coef_df = pd.DataFrame.from_dict(dict)
         coef_df.to_csv(f'data/coef.csv')
 
-@ray.remote
+#@ray.remote
 def Brute(Args):
     f, x, a = Args
     optimal = brute(f, x, args = a, full_output=True, finish=fmin)
