@@ -14,8 +14,9 @@ from multiprocessing import Pool
 from tqdm import tqdm
 import ray
 import gc
+import math
 
-#ray.init()
+ray.init()
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
@@ -89,6 +90,7 @@ class Learner(object):
         self.r_0 = r_0
         self.d_0 = d_0
         self.end = True
+        self.len_data_4th= 84
 
     def extend_index(self, index, new_size):
         values = index.values
@@ -99,7 +101,7 @@ class Learner(object):
         return values
 
     def predict(self, beta, gamma, mu, data, recovered, death, s_0, i_0, r_0, d_0, idx):
-        new_index = self.extend_index(recovered.index, self.predict_range+84-idx)
+        new_index = self.extend_index(recovered.index, self.predict_range+self.len_data_4th-idx)
         size = len(new_index)
         def SIRD(t, y):
             S = y[0]
@@ -113,7 +115,7 @@ class Learner(object):
         return new_index, extended_actual, extended_recovered, extended_death, solve_ivp(SIRD, [0, size], [s_0,i_0,r_0, d_0], t_eval=np.arange(0, size, 1))
 
     def predict_end(self, beta, gamma, mu, data, recovered, death, s_0, idx):
-        new_index = self.extend_index(recovered.index, self.predict_range+84-idx-1)
+        new_index = self.extend_index(recovered.index, self.predict_range+self.len_data_4th-idx-1)
         size = len(new_index)
         def SIRD(t, y):
             S = y[0]
@@ -124,8 +126,8 @@ class Learner(object):
         extended_actual = np.concatenate((data, [None] * (size - len(data))))
         extended_recovered = np.concatenate((recovered.values, [None] * (size - len(recovered.values))))
         extended_death = np.concatenate((death.values, [None] * (size - len(death.values))))
-        s1 = s_0 +data[0] + recovered.values[0] + death.values[0] - data[-1]- recovered.values[-1]- death.values[-1]
-        return new_index, extended_actual, extended_recovered, extended_death, solve_ivp(SIRD, [84-1, 84-1+self.predict_range], [s1, data[-1],recovered.values[-1], death.values[-1]], t_eval=np.arange(84-1, 84-1+self.predict_range, 1))
+        s1 = s_0 + data[0] + recovered.values[0] + death.values[0] - data[-1]- recovered.values[-1]- death.values[-1]
+        return new_index, extended_actual, extended_recovered, extended_death, solve_ivp(SIRD, [self.len_data_4th-1, self.len_data_4th-1+self.predict_range], [s1, data[-1],recovered.values[-1], death.values[-1]], t_eval=np.arange(self.len_data_4th-1, self.len_data_4th-1+self.predict_range, 1))
 
     def train(self):
         df = pd.read_csv('data/train.csv')
@@ -135,108 +137,146 @@ class Learner(object):
         total = df.groupby(['Country_Region','Date']).sum()
         dict = {}
         Args = []
-        for i in range(313):
-            country = df.loc[i*84].Country_Region
-            province =  df.loc[i*84].Province_State
-            confirmed = df[i*84:(i+1)*84].ConfirmedCases
-            death = df[i*84:(i+1)*84].Fatalities
+        n_areas = 313
+        IDX = []
+        for i in range(125,133):
+            country = df.loc[i*self.len_data_4th].Country_Region
+            province =  df.loc[i*self.len_data_4th].Province_State
+            confirmed = df[i*self.len_data_4th:(i+1)*self.len_data_4th].ConfirmedCases
+            death = df[i*self.len_data_4th:(i+1)*self.len_data_4th].Fatalities
             recovered = rec[rec['Country/Region'] == country]
             if country not in province_countries:
                 recovered = recovered.iloc[0].loc[self.start_date:]
-                recovered = recovered[:84]
+                recovered = recovered[:self.len_data_4th]
             elif country in ['US', 'Canada']:
                 recovered = recovered.iloc[0].loc[self.start_date:]
-                recovered = recovered[:84]
+                recovered = recovered[:self.len_data_4th]
                 total_confirmed = total.loc[country].ConfirmedCases.values
                 sr = sum(recovered.values)
-                for j in range(84):
+                for j in range(self.len_data_4th):
                     recovered[j] = int(confirmed.values[j]*sr/sum(total_confirmed))
             else:
-                if isinstance(df.loc[i*84].Province_State, float):
+                if isinstance(df.loc[i*self.len_data_4th].Province_State, float):
                     recovered = recovered[recovered['Province/State'].isnull()]
                     recovered = recovered.iloc[0].loc[self.start_date:]
-                    recovered = recovered[:84]
+                    recovered = recovered[:self.len_data_4th]
                 else:
                     recovered = recovered[recovered['Province/State']==province]
                     recovered = recovered.iloc[0].loc[self.start_date:]
-                    recovered = recovered[:84]
+                    recovered = recovered[:self.len_data_4th]
+
             data = confirmed.values - recovered.values - death.values
 
             if self.idx == None or country == 'China':
                 idx  = next((i for i, x in enumerate(confirmed.values) if x), None)
             else:
                 idx = max(self.idx, next((i for i, x in enumerate(confirmed.values) if x), None) )
-            idx = min(71, idx) #84-13 = 84-43+30
+
+            len_submission = 43
+            max_limit_idx = self.len_data_4th- len_submission + self.predict_range
+            idx = min(max_limit_idx, idx) #len_data_4th-13 = self.len_data_4th- len_submission + predict_range = 84 - len_submission + 30 = 71
+
             s0_guess = max(confirmed.values)
-            s0_guess = max(s0_guess, 1000)
+            s0_guess = max(s0_guess, 900)
             bounds=[(s0_guess*2/3, s0_guess*4/3),(0.00001, 0.0001), (0.001, 0.01), (0.001, 0.01)]
 
-            i_0, r_0, d_0 = max(data[idx],1), recovered[idx], death.values[idx]
+            i_0, r_0, d_0 = data[idx], recovered[idx], death.values[idx]
             #i_0, r_0, d_0 = max(data[idx],1), max(recovered[idx],1), max(death.values[idx],1)
-            #print(idx, i_0, r_0, d_0)
 
             rranges = (slice(bounds[0][0], bounds[0][1], s0_guess/5), slice(bounds[1][0], bounds[1][1], 0.00001), slice(bounds[2][0], bounds[2][1], 0.001), slice(bounds[3][0], bounds[3][1], 0.001))
             brute_args = (loss, rranges, (data[idx:], recovered.values[idx:], death.values[idx:], i_0, r_0, d_0))
-            #Args.append(Brute.remote(brute_args))
-            Args.append(brute_args)
+            Args.append(Brute.remote(brute_args))
+            #Args.append(brute_args)
 
-        #Optimal = ray.get(Args)
+        Optimal = ray.get(Args)
 
-        Optimal = []
-        for i in tqdm(range(40)):
-            #gc.disable()
-            with Pool() as p:
-                start = time.time()
-                n = 8
-                optimal = p.map(Brute, Args[n*i:min((i+1)*n, 313)])
-                end = time.time()
-                print("brute time: ", end-start)
-                Optimal += optimal
-                #p.close()
-                #p.terminate()
-            #gc.enable()
+        #Optimal = []
+        #for i in tqdm(range(40)):
+            #with Pool() as p:
+                #start = time.time()
+                #n = 8
+                #optimal = p.map(Brute, Args[n*i:min((i+1)*n, n_areas)])
+                #end = time.time()
+                #print("brute time: ", end-start)
+                #Optimal += optimal
 
 
-        for i in tqdm(range(313)):
-            optimal = Optimal[i]
+        for i in tqdm(range(125,133)):
+            country = df.loc[i*self.len_data_4th].Country_Region
+            province =  df.loc[i*self.len_data_4th].Province_State
+            confirmed = df[i*self.len_data_4th:(i+1)*self.len_data_4th].ConfirmedCases
+            death = df[i*self.len_data_4th:(i+1)*self.len_data_4th].Fatalities
+            recovered = rec[rec['Country/Region'] == country]
+            if country not in province_countries:
+                recovered = recovered.iloc[0].loc[self.start_date:]
+                recovered = recovered[:self.len_data_4th]
+            elif country in ['US', 'Canada']:
+                recovered = recovered.iloc[0].loc[self.start_date:]
+                recovered = recovered[:self.len_data_4th]
+                total_confirmed = total.loc[country].ConfirmedCases.values
+                sr = sum(recovered.values)
+                for j in range(self.len_data_4th):
+                    recovered[j] = int(confirmed.values[j]*sr/sum(total_confirmed))
+            else:
+                if isinstance(df.loc[i*self.len_data_4th].Province_State, float):
+                    recovered = recovered[recovered['Province/State'].isnull()]
+                    recovered = recovered.iloc[0].loc[self.start_date:]
+                    recovered = recovered[:self.len_data_4th]
+                else:
+                    recovered = recovered[recovered['Province/State']==province]
+                    recovered = recovered.iloc[0].loc[self.start_date:]
+                    recovered = recovered[:self.len_data_4th]
+
+            data = confirmed.values - recovered.values - death.values
+
+            if self.idx == None or country == 'China':
+                idx  = next((i for i, x in enumerate(confirmed.values) if x), None)
+            else:
+                idx = max(self.idx, next((i for i, x in enumerate(confirmed.values) if x), None) )
+
+            len_submission = 43
+            max_limit_idx = self.len_data_4th- len_submission + self.predict_range
+            idx = min(max_limit_idx, idx) #len_data_4th-13 = self.len_data_4th- len_submission + predict_range = 84 - len_submission + 30 = 71
+
+            optimal = Optimal[i-125]
             s_0, beta, gamma, mu = optimal[0]
             #optimal = brute(loss, rranges, args=(data[idx:], recovered.values[idx:], death.values[idx:], i_0, r_0, d_0), full_output=True, finish=fmin)
             #print("optimized s_0, beta, gamma, mu :", optimal[0])
             #print("mse:", optimal[1])
             #print(optimal[2].shape)
-            country = df.loc[i*84].Country_Region
-            dict[country] = [s_0, beta, gamma, mu, optimal[1], optimal[1]/confirmed.values[-1]]
+            country = df.loc[i*self.len_data_4th].Country_Region
+            province = str(df.loc[i*self.len_data_4th].Province_State)
+            dict[country+" "+province] = [s_0, beta, gamma, mu, optimal[1], optimal[1]/confirmed.values[-1]]
 
-
-            mu = max(mu, 0) # death rate can't be negative
+            #mu = max(mu, 0) # death rate can't be negative
             #start = time.time()
             if self.end:
                 new_index, extended_actual, extended_recovered, extended_death, prediction = self.predict_end(beta, gamma, mu, data[idx:], recovered[idx:], death[idx:], s_0, idx)
-                sub.ConfirmedCases[i*43 + 13:(i+1)*43] = [round(e) for e in (prediction.y[1] + prediction.y[2]+ prediction.y[3])]
-                sub.Fatalities[i*43 + 13:(i+1)*43] = [round(e) for e in (prediction.y[3])]
+                sub.ConfirmedCases[i*len_submission + 13:(i+1)*len_submission] = [round(e) for e in (prediction.y[1] + prediction.y[2]+ prediction.y[3])]
+                sub.Fatalities[i*len_submission + 13:(i+1)*len_submission] = [round(e) for e in (prediction.y[3])]
             else:
                 new_index, extended_actual, extended_recovered, extended_death, prediction = self.predict(beta, gamma, mu, data[idx:], recovered[idx:], death[idx:], s_0, i_0, r_0, d_0, idx)
-                sub.ConfirmedCases[i*43:(i+1)*43] = [round(e) for e in (prediction.y[1][-43:] + prediction.y[2][-43:]+ prediction.y[3][-43:])]
-                sub.Fatalities[i*43:(i+1)*43] = [round(e) for e in (prediction.y[3][-43:])]
+                sub.ConfirmedCases[i*len_submission:(i+1)*len_submission] = [round(e) for e in (prediction.y[1][-len_submission:] + prediction.y[2][-len_submission:]+ prediction.y[3][-len_submission:])]
+                sub.Fatalities[i*len_submission:(i+1)*len_submission] = [round(e) for e in (prediction.y[3][-len_submission:])]
             #end = time.time()
             #print("predict time: ", end-start)
-            #size = len(new_index)
-            #predicted_susceptible = np.concatenate(([None] * (size-len(prediction.y[0])), prediction.y[0]))
-            #predicted_infected = np.concatenate(([None] * ( size-len(prediction.y[1])), prediction.y[1]))
-            #predicted_recovered = np.concatenate(([None] * ( size-len(prediction.y[2])), prediction.y[2]))
-            #predicted_death = np.concatenate(([None] * ( size-len(prediction.y[3])), prediction.y[3]))
-            #plot_df = pd.DataFrame({'Infected data': extended_actual, 'Recovered data': extended_recovered, 'Death data': extended_death, 'Susceptible': predicted_susceptible, 'Infected': predicted_infected , 'Recovered': predicted_recovered, 'Death': predicted_death}, index=new_index)
-            #fig, ax = plt.subplots(figsize=(15, 10))
-            #ax.set_title(country)
-            #plot_df.plot(ax=ax)
-            #print(f"country={country}, s_0={s_0:.8f}, beta={beta:.8f}, gamma={gamma:.8f}, r_0:{(beta/gamma):.8f}, mu={mu:.8f}")
-            #fig.savefig(f"{country}.png")
+            size = len(new_index)
+            predicted_susceptible = np.concatenate(([None] * (size-len(prediction.y[0])), prediction.y[0]))
+            predicted_infected = np.concatenate(([None] * ( size-len(prediction.y[1])), prediction.y[1]))
+            predicted_recovered = np.concatenate(([None] * ( size-len(prediction.y[2])), prediction.y[2]))
+            predicted_death = np.concatenate(([None] * ( size-len(prediction.y[3])), prediction.y[3]))
+            plot_df = pd.DataFrame({'Infected data': extended_actual, 'Recovered data': extended_recovered, 'Death data': extended_death, 'Susceptible': predicted_susceptible, 'Infected': predicted_infected , 'Recovered': predicted_recovered, 'Death': predicted_death}, index=new_index)
+            fig, ax = plt.subplots(figsize=(15, 10))
+            ax.set_title(country+", "+province)
+            plot_df.plot(ax=ax)
+            print(f"country={country}, s_0={s_0:.8f}, beta={beta:.8f}, gamma={gamma:.8f}, r_0:{(beta/gamma):.8f}, mu={mu:.8f}")
+            fig.savefig(f"figs/{country}-{province}.png")
         sub = sub.astype(int)
         sub.to_csv(f'data/submission.csv')
         coef_df = pd.DataFrame.from_dict(dict)
         coef_df.to_csv(f'data/coef.csv')
 
-#@ray.remote
+@ray.remote
 def Brute(Args):
     f, x, a = Args
     optimal = brute(f, x, args = a, full_output=True, finish=fmin)
@@ -252,7 +292,9 @@ def loss(point, data, recovered, death, i_0, r_0, d_0):
         D = y[3]
         return [-beta*S*I, beta*S*I-gamma*I - mu*I , gamma*I, mu*I ]
     solution = solve_ivp(SIRD, [0, size], [s_0,i_0,r_0,d_0], t_eval=np.arange(0, size, 1), vectorized=True)
-    #result  = np.sqrt(np.sqrt(np.mean((solution.y[2] - recovered)**2+(solution.y[1] - data)**2+(solution.y[3]-death)**2)))
+    #Y = [x for x in data] +[x for x in recovered]+ [x for x in death]
+    #Y_pred = [x for x in solution.y[1]] + [x for x in solution.y[2]]+ [x for x in solution.y[3]]
+    #result = rmsle(Y, Y_pred) + max(0, -s_0)
     W = 0.8
     X = [(solution.y[1] - data), W*(solution.y[2] - recovered), (solution.y[3] - death)]
     mid = size//3
@@ -263,6 +305,23 @@ def loss(point, data, recovered, death, i_0, r_0, d_0):
         result += sum([sum(Y[w]**2*(w+1)) for w in range(len(Y))])/6/size
     result = np.sqrt(np.sqrt(result))
     return result
+
+
+def rmsle(y, y_pred):
+    assert len(y) == len(y_pred)
+    #y, y_pred = list(y), list(y_pred)
+    terms_to_sum = 0
+    for i,pred in enumerate(y_pred):
+        if y[i] != 0:
+            if pred < 0:
+                terms_to_sum += 10
+            else:
+                terms_to_sum += (math.log(y_pred[i] + 1) - math.log(y[i] + 1)) ** 2.0
+        elif y[i] == 0:
+            if pred !=0:
+                terms_to_sum += 10
+
+    return (terms_to_sum * (1.0/len(y)))**0.5
 
 def main():
 
