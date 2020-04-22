@@ -139,7 +139,7 @@ class Learner(object):
         Args = []
         n_areas = 313
         IDX = []
-        for i in range(125,133):
+        for i in range(n_areas):
             country = df.loc[i*self.len_data_4th].Country_Region
             province =  df.loc[i*self.len_data_4th].Province_State
             confirmed = df[i*self.len_data_4th:(i+1)*self.len_data_4th].ConfirmedCases
@@ -177,13 +177,12 @@ class Learner(object):
             idx = min(max_limit_idx, idx) #len_data_4th-13 = self.len_data_4th- len_submission + predict_range = 84 - len_submission + 30 = 71
 
             s0_guess = max(confirmed.values)
-            s0_guess = max(s0_guess, 900)
-            bounds=[(s0_guess*2/3, s0_guess*4/3),(0.00001, 0.0001), (0.001, 0.01), (0.001, 0.01)]
+            bounds=[(s0_guess, s0_guess*4),(0.00001, 0.0001), (0.001, 0.01), (0.001, 0.01)]
 
             i_0, r_0, d_0 = data[idx], recovered[idx], death.values[idx]
             #i_0, r_0, d_0 = max(data[idx],1), max(recovered[idx],1), max(death.values[idx],1)
 
-            rranges = (slice(bounds[0][0], bounds[0][1], s0_guess/5), slice(bounds[1][0], bounds[1][1], 0.00001), slice(bounds[2][0], bounds[2][1], 0.001), slice(bounds[3][0], bounds[3][1], 0.001))
+            rranges = (slice(bounds[0][0], bounds[0][1], s0_guess/2), slice(bounds[1][0], bounds[1][1], 0.00001), slice(bounds[2][0], bounds[2][1], 0.001), slice(bounds[3][0], bounds[3][1], 0.001))
             brute_args = (loss, rranges, (data[idx:], recovered.values[idx:], death.values[idx:], i_0, r_0, d_0))
             Args.append(Brute.remote(brute_args))
             #Args.append(brute_args)
@@ -201,7 +200,7 @@ class Learner(object):
                 #Optimal += optimal
 
 
-        for i in tqdm(range(125,133)):
+        for i in tqdm(range(n_areas)):
             country = df.loc[i*self.len_data_4th].Country_Region
             province =  df.loc[i*self.len_data_4th].Province_State
             confirmed = df[i*self.len_data_4th:(i+1)*self.len_data_4th].ConfirmedCases
@@ -238,7 +237,7 @@ class Learner(object):
             max_limit_idx = self.len_data_4th- len_submission + self.predict_range
             idx = min(max_limit_idx, idx) #len_data_4th-13 = self.len_data_4th- len_submission + predict_range = 84 - len_submission + 30 = 71
 
-            optimal = Optimal[i-125]
+            optimal = Optimal[i]
             s_0, beta, gamma, mu = optimal[0]
             #optimal = brute(loss, rranges, args=(data[idx:], recovered.values[idx:], death.values[idx:], i_0, r_0, d_0), full_output=True, finish=fmin)
             #print("optimized s_0, beta, gamma, mu :", optimal[0])
