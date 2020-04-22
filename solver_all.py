@@ -90,7 +90,7 @@ class Learner(object):
         self.r_0 = r_0
         self.d_0 = d_0
         self.end = True
-        self.len_data_4th= 84
+        self.len_data_4th= 91
 
     def extend_index(self, index, new_size):
         values = index.values
