@@ -127,6 +127,7 @@ class Learner(object):
         extended_recovered = np.concatenate((recovered.values, [None] * (size - len(recovered.values))))
         extended_death = np.concatenate((death.values, [None] * (size - len(death.values))))
         s1 = s_0 + data[0] + recovered.values[0] + death.values[0] - data[-1]- recovered.values[-1]- death.values[-1]
+        s1 = np.abs(s1)
         return new_index, extended_actual, extended_recovered, extended_death, solve_ivp(SIRD, [self.len_data_4th-1, self.len_data_4th-1+self.predict_range], [s1, data[-1],recovered.values[-1], death.values[-1]], t_eval=np.arange(self.len_data_4th-1, self.len_data_4th-1+self.predict_range, 1))
 
     def train(self):
@@ -182,7 +183,7 @@ class Learner(object):
             i_0, r_0, d_0 = data[idx], recovered[idx], death.values[idx]
             #i_0, r_0, d_0 = max(data[idx],1), max(recovered[idx],1), max(death.values[idx],1)
 
-            rranges = (slice(bounds[0][0], bounds[0][1], s0_guess/2), slice(bounds[1][0], bounds[1][1], 0.00001), slice(bounds[2][0], bounds[2][1], 0.001), slice(bounds[3][0], bounds[3][1], 0.001))
+            rranges = (slice(bounds[0][0], bounds[0][1], s0_guess), slice(bounds[1][0], bounds[1][1], 0.00001), slice(bounds[2][0], bounds[2][1], 0.001), slice(bounds[3][0], bounds[3][1], 0.001))
             brute_args = (loss, rranges, (data[idx:], recovered.values[idx:], death.values[idx:], i_0, r_0, d_0))
             Args.append(Brute.remote(brute_args))
             #Args.append(brute_args)
