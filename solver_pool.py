@@ -12,16 +12,34 @@ import urllib.request
 import time
 from multiprocessing import Pool
 from tqdm import tqdm
-import ray
+#import ray
 import gc
 import math
 
-ray.init()
+#ray.init()
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
 
+    parser.add_argument(
+        '--start-date',
+        required=False,
+        action='store',
+        dest='start_date',
+        help='Start date on MM/DD/YY format ... I know ...' +
+        'It defaults to first data available 1/22/20',
+        metavar='START_DATE',
+        type=str,
+        default="1/22/20")
 
+    parser.add_argument(
+        '--prediction-days',
+        required=False,
+        dest='predict_range',
+        help='Days to predict with the model. Defaults to 150',
+        metavar='PREDICT_RANGE',
+        type=int,
+        default=30)
 
     parser.add_argument(
         '--idx',
@@ -31,16 +49,46 @@ def parse_arguments():
         type=int,
         default=None)
 
+    parser.add_argument(
+        '--I_0',
+        required=False,
+        dest='i_0',
+        help='I_0. Defaults to 2',
+        metavar='I_0',
+        type=int,
+        default=2)
+
+    parser.add_argument(
+        '--R_0',
+        required=False,
+        dest='r_0',
+        help='R_0. Defaults to 0',
+        metavar='R_0',
+        type=int,
+        default=1)
+
+    parser.add_argument(
+        '--D_0',
+        required=False,
+        dest='d_0',
+        help='D_0. Defaults to 1',
+        metavar='D_0',
+        type=int,
+        default=1)
+
     args = parser.parse_args()
 
-    return (  args.idx )
+    return ( args.start_date, args.predict_range, args.idx, args.i_0, args.r_0, args.d_0)
 
 class Learner(object):
-    def __init__(self, loss, idx):
+    def __init__(self, loss, start_date, predict_range, idx, i_0, r_0, d_0):
         self.loss = loss
-        self.start_date = '1/22/20'
-        self.predict_range = 43-20
+        self.start_date = start_date
+        self.predict_range = predict_range
         self.idx = idx
+        self.i_0 = i_0
+        self.r_0 = r_0
+        self.d_0 = d_0
         self.end = True
         self.len_data_4th= 91
 
@@ -91,6 +139,7 @@ class Learner(object):
         dict = {}
         Args = []
         n_areas = 313
+        IDX = []
         for i in range(n_areas):
             country = df.loc[i*self.len_data_4th].Country_Region
             province =  df.loc[i*self.len_data_4th].Province_State
@@ -127,7 +176,7 @@ class Learner(object):
             len_submission = 43
             max_limit_idx = self.len_data_4th- len_submission + self.predict_range
             idx = min(max_limit_idx, idx) #len_data_4th-13 = self.len_data_4th- len_submission + predict_range = 84 - len_submission + 30 = 71
-
+            idx = min(71, idx)
             s0_guess = max(confirmed.values)
             if s0_guess > 100000:
                 h_limit = s0_guess*2
@@ -138,7 +187,7 @@ class Learner(object):
                 l_limit = s0_guess/2
                 s0_grid_size = s0_guess
             else:
-                h_limit = s0_guess * 4
+                h_limit = s0_guess * 3
                 l_limit = s0_guess/2
                 s0_grid_size = s0_guess
             bounds=[(l_limit, h_limit),(0.00001, 0.0001), (0.001, 0.01), (0.001, 0.01)]
@@ -146,22 +195,24 @@ class Learner(object):
             i_0, r_0, d_0 = data[idx], recovered[idx], death.values[idx]
             #i_0, r_0, d_0 = max(data[idx],1), max(recovered[idx],1), max(death.values[idx],1)
 
-            rranges = (slice(bounds[0][0], bounds[0][1], s0_guess), slice(bounds[1][0], bounds[1][1], 0.00001), slice(bounds[2][0], bounds[2][1], 0.001), slice(bounds[3][0], bounds[3][1], 0.001))
+            rranges = (slice(bounds[0][0], bounds[0][1], s0_grid_size), slice(bounds[1][0], bounds[1][1], 0.00001), slice(bounds[2][0], bounds[2][1], 0.001), slice(bounds[3][0], bounds[3][1], 0.001))
             brute_args = (loss, rranges, (data[idx:], recovered.values[idx:], death.values[idx:], i_0, r_0, d_0))
-            Args.append(Brute.remote(brute_args))
-            #Args.append(brute_args)
+            #Args.append(Brute.remote(brute_args))
+            Args.append(brute_args)
 
-        Optimal = ray.get(Args)
+        #Optimal = ray.get(Args)
 
-        #Optimal = []
-        #for i in tqdm(range(40)):
-            #with Pool() as p:
-                #start = time.time()
-                #n = 8
-                #optimal = p.map(Brute, Args[n*i:min((i+1)*n, n_areas)])
-                #end = time.time()
-                #print("brute time: ", end-start)
-                #Optimal += optimal
+        Optimal = []
+        for i in tqdm(range(216,224)):
+            with Pool() as p:
+                start = time.time()
+                n = 1
+                country = df.loc[i*self.len_data_4th].Country_Region
+                print(country)
+                optimal = p.map(Brute, Args[n*i:min((i+1)*n, n_areas)])
+                end = time.time()
+                print("brute time: ", end-start)
+                Optimal += optimal
 
 
         for i in tqdm(range(n_areas)):
@@ -198,9 +249,9 @@ class Learner(object):
                 idx = max(self.idx, next((i for i, x in enumerate(confirmed.values) if x), None) )
 
             len_submission = 43
-            max_limit_idx = self.len_data_4th- len_submission + self.predict_range
+            max_limit_idx = self.len_data_4th - len_submission + self.predict_range
             idx = min(max_limit_idx, idx) #len_data_4th-13 = self.len_data_4th- len_submission + predict_range = 84 - len_submission + 30 = 71
-
+            idx = min(71, idx)
             optimal = Optimal[i]
             s_0, beta, gamma, mu = optimal[0]
             #optimal = brute(loss, rranges, args=(data[idx:], recovered.values[idx:], death.values[idx:], i_0, r_0, d_0), full_output=True, finish=fmin)
@@ -215,8 +266,8 @@ class Learner(object):
             #start = time.time()
             if self.end:
                 new_index, extended_actual, extended_recovered, extended_death, prediction = self.predict_end(beta, gamma, mu, data[idx:], recovered[idx:], death[idx:], s_0, idx)
-                sub.ConfirmedCases[i*len_submission + 20:(i+1)*len_submission] = [round(e) for e in (prediction.y[1] + prediction.y[2]+ prediction.y[3])]
-                sub.Fatalities[i*len_submission + 20:(i+1)*len_submission] = [round(e) for e in (prediction.y[3])]
+                sub.ConfirmedCases[i*len_submission + 13:(i+1)*len_submission] = [round(e) for e in (prediction.y[1] + prediction.y[2]+ prediction.y[3])]
+                sub.Fatalities[i*len_submission + 13:(i+1)*len_submission] = [round(e) for e in (prediction.y[3])]
             else:
                 new_index, extended_actual, extended_recovered, extended_death, prediction = self.predict(beta, gamma, mu, data[idx:], recovered[idx:], death[idx:], s_0, i_0, r_0, d_0, idx)
                 sub.ConfirmedCases[i*len_submission:(i+1)*len_submission] = [round(e) for e in (prediction.y[1][-len_submission:] + prediction.y[2][-len_submission:]+ prediction.y[3][-len_submission:])]
@@ -235,16 +286,11 @@ class Learner(object):
             print(f"country={country}, s_0={s_0:.8f}, beta={beta:.8f}, gamma={gamma:.8f}, r_0:{(beta/gamma):.8f}, mu={mu:.8f}")
             fig.savefig(f"figs/{country}-{province}.png")
         sub = sub.astype(int)
-        sub = sub[['ForecastId', 'ConfirmedCases', 'Fatalities']]
-        train = pd.read_csv('data/train.csv')
-        for i in range(313):
-            sub.ConfirmedCases[43*i:20+43*i] = list(train.ConfirmedCases.values[(i+1)*self.len_data_4th-20:(i+1)*self.len_data_4th])
-            sub.Fatalities[43*i:20+43*i] = list(train.Fatalities.values[(i+1)*self.len_data_4th-20:(i+1)*self.len_data_4th])
         sub.to_csv(f'data/submission.csv')
         coef_df = pd.DataFrame.from_dict(dict)
         coef_df.to_csv(f'data/coef.csv')
 
-@ray.remote
+#@ray.remote
 def Brute(Args):
     f, x, a = Args
     optimal = brute(f, x, args = a, full_output=True, finish=fmin)
@@ -293,10 +339,10 @@ def rmsle(y, y_pred):
 
 def main():
 
-    idx = parse_arguments()
+    startdate, predict_range ,idx, i_0, r_0, d_0 = parse_arguments()
 
 
-    learner = Learner(loss, idx)
+    learner = Learner(loss, startdate, predict_range, idx, i_0, r_0, d_0)
     learner.train()
         #except BaseException:
         #    print('WARNING: Problem processing ' + str(country) +
