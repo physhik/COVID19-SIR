@@ -156,14 +156,14 @@ class Learner(object):
 
 
         Optimal = []
-        for i in tqdm(range(40)):
+        for i in tqdm(range(1)):
             with Pool() as p:
                 #start = time.time()
                 n = 8
                 optimal = p.map(Brute, Args[n*i:min((i+1)*n, n_areas)])
                 #end = time.time()
                 #print("brute time: ", end-start)
-                Optimal.append(optimal)
+                Optimal+=optimal
 
 
         for i in tqdm(range(n_areas)):

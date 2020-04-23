@@ -91,7 +91,7 @@ class Learner(object):
         total = df.groupby(['Country_Region','Date']).sum()
         dict = {}
         Args = []
-        n_areas = 313
+        n_areas = 8
         n_each = int(len(df)/313)
         for i in range(n_areas):
             country = df.loc[i*n_each].Country_Region
