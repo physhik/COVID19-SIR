@@ -53,7 +53,7 @@ class Learner(object):
             values = np.append(values, datetime.strftime(current, '%m/%d/%y'))
         return values
 
-    def predict(self, beta, gamma, mu, data, recovered, death, s_0, i_0, r_0, d_0, idx):
+    def predict(self, beta, gamma, mu, data, recovered, death, s_0, i_0, r_0, d_0, idx, n_each):
         new_index = self.extend_index(recovered.index, self.predict_range+n_each-idx)
         size = len(new_index)
         def SIRD(t, y):
@@ -67,7 +67,7 @@ class Learner(object):
         extended_death = np.concatenate((death.values, [None] * (size - len(death.values))))
         return new_index, extended_actual, extended_recovered, extended_death, solve_ivp(SIRD, [0, size], [s_0,i_0,r_0, d_0], t_eval=np.arange(0, size, 1))
 
-    def predict_end(self, beta, gamma, mu, data, recovered, death, s_0, idx):
+    def predict_end(self, beta, gamma, mu, data, recovered, death, s_0, idx, n_each):
         new_index = self.extend_index(recovered.index, self.predict_range+n_each-idx-1)
         size = len(new_index)
         def SIRD(t, y):
@@ -216,7 +216,7 @@ class Learner(object):
             #mu = max(mu, 0) # death rate can't be negative
             #start = time.time()
             if self.end:
-                new_index, extended_actual, extended_recovered, extended_death, prediction = self.predict_end(beta, gamma, mu, data[idx:], recovered[idx:], death[idx:], s_0, idx)
+                new_index, extended_actual, extended_recovered, extended_death, prediction = self.predict_end(beta, gamma, mu, data[idx:], recovered[idx:], death[idx:], s_0, idx, n_each)
                 sub.ConfirmedCases[i*len_submission + self.overlap:(i+1)*len_submission] = [round(e) for e in (prediction.y[1] + prediction.y[2]+ prediction.y[3])]
                 sub.Fatalities[i*len_submission + self.overlap:(i+1)*len_submission] = [round(e) for e in (prediction.y[3])]
             else:
