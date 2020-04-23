@@ -10,7 +10,7 @@ import sys
 import ssl
 import urllib.request
 import time
-from multiprocessing import Pool
+#from multiprocessing import Pool
 from tqdm import tqdm
 import ray
 import gc

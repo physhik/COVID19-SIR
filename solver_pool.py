@@ -12,34 +12,15 @@ import urllib.request
 import time
 from multiprocessing import Pool
 from tqdm import tqdm
-#import ray
 import gc
 import math
+#import ray
 
-#ray.init()
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument(
-        '--start-date',
-        required=False,
-        action='store',
-        dest='start_date',
-        help='Start date on MM/DD/YY format ... I know ...' +
-        'It defaults to first data available 1/22/20',
-        metavar='START_DATE',
-        type=str,
-        default="1/22/20")
 
-    parser.add_argument(
-        '--prediction-days',
-        required=False,
-        dest='predict_range',
-        help='Days to predict with the model. Defaults to 150',
-        metavar='PREDICT_RANGE',
-        type=int,
-        default=30)
 
     parser.add_argument(
         '--idx',
@@ -49,48 +30,19 @@ def parse_arguments():
         type=int,
         default=None)
 
-    parser.add_argument(
-        '--I_0',
-        required=False,
-        dest='i_0',
-        help='I_0. Defaults to 2',
-        metavar='I_0',
-        type=int,
-        default=2)
-
-    parser.add_argument(
-        '--R_0',
-        required=False,
-        dest='r_0',
-        help='R_0. Defaults to 0',
-        metavar='R_0',
-        type=int,
-        default=1)
-
-    parser.add_argument(
-        '--D_0',
-        required=False,
-        dest='d_0',
-        help='D_0. Defaults to 1',
-        metavar='D_0',
-        type=int,
-        default=1)
-
     args = parser.parse_args()
 
-    return ( args.start_date, args.predict_range, args.idx, args.i_0, args.r_0, args.d_0)
+    return (  args.idx )
 
 class Learner(object):
-    def __init__(self, loss, start_date, predict_range, idx, i_0, r_0, d_0):
+    def __init__(self, loss, idx):
         self.loss = loss
-        self.start_date = start_date
-        self.predict_range = predict_range
+        self.start_date = '1/22/20'
+        self.overlap = 20
+        self.predict_range = 43 - self.overlap
         self.idx = idx
-        self.i_0 = i_0
-        self.r_0 = r_0
-        self.d_0 = d_0
         self.end = True
-        self.len_data_4th= 91
+        self.len_train = 84
 
     def extend_index(self, index, new_size):
         values = index.values
@@ -101,7 +53,7 @@ class Learner(object):
         return values
 
     def predict(self, beta, gamma, mu, data, recovered, death, s_0, i_0, r_0, d_0, idx):
-        new_index = self.extend_index(recovered.index, self.predict_range+self.len_data_4th-idx)
+        new_index = self.extend_index(recovered.index, self.predict_range+n_each-idx)
         size = len(new_index)
         def SIRD(t, y):
             S = y[0]
@@ -115,7 +67,7 @@ class Learner(object):
         return new_index, extended_actual, extended_recovered, extended_death, solve_ivp(SIRD, [0, size], [s_0,i_0,r_0, d_0], t_eval=np.arange(0, size, 1))
 
     def predict_end(self, beta, gamma, mu, data, recovered, death, s_0, idx):
-        new_index = self.extend_index(recovered.index, self.predict_range+self.len_data_4th-idx-1)
+        new_index = self.extend_index(recovered.index, self.predict_range+n_each-idx-1)
         size = len(new_index)
         def SIRD(t, y):
             S = y[0]
@@ -128,7 +80,7 @@ class Learner(object):
         extended_death = np.concatenate((death.values, [None] * (size - len(death.values))))
         s1 = s_0 + data[0] + recovered.values[0] + death.values[0] - data[-1]- recovered.values[-1]- death.values[-1]
         s1 = np.abs(s1)
-        return new_index, extended_actual, extended_recovered, extended_death, solve_ivp(SIRD, [self.len_data_4th-1, self.len_data_4th-1+self.predict_range], [s1, data[-1],recovered.values[-1], death.values[-1]], t_eval=np.arange(self.len_data_4th-1, self.len_data_4th-1+self.predict_range, 1))
+        return new_index, extended_actual, extended_recovered, extended_death, solve_ivp(SIRD, [n_each-1, n_each-1+self.predict_range], [s1, data[-1],recovered.values[-1], death.values[-1]], t_eval=np.arange(n_each-1, n_each-1+self.predict_range, 1))
 
     def train(self):
         df = pd.read_csv('data/train.csv')
@@ -139,32 +91,32 @@ class Learner(object):
         dict = {}
         Args = []
         n_areas = 313
-        IDX = []
+        n_each = len(df)/313
         for i in range(n_areas):
-            country = df.loc[i*self.len_data_4th].Country_Region
-            province =  df.loc[i*self.len_data_4th].Province_State
-            confirmed = df[i*self.len_data_4th:(i+1)*self.len_data_4th].ConfirmedCases
-            death = df[i*self.len_data_4th:(i+1)*self.len_data_4th].Fatalities
+            country = df.loc[i*n_each].Country_Region
+            province =  df.loc[i*n_each].Province_State
+            confirmed = df[i*n_each:(i+1)*n_each].ConfirmedCases[:self.len_train ]
+            death = df[i*n_each:(i+1)*n_each].Fatalities[:self.len_train ]
             recovered = rec[rec['Country/Region'] == country]
             if country not in province_countries:
                 recovered = recovered.iloc[0].loc[self.start_date:]
-                recovered = recovered[:self.len_data_4th]
+                recovered = recovered[:self.len_train ]
             elif country in ['US', 'Canada']:
                 recovered = recovered.iloc[0].loc[self.start_date:]
-                recovered = recovered[:self.len_data_4th]
-                total_confirmed = total.loc[country].ConfirmedCases.values
+                recovered = recovered[:self.len_train ]
+                total_confirmed = total.loc[country].ConfirmedCases.values[:self.len_train ]
                 sr = sum(recovered.values)
-                for j in range(self.len_data_4th):
-                    recovered[j] = int(confirmed.values[j]*sr/sum(total_confirmed))
+                for j in range(self.len_train):
+                    recovered[j] = confirmed.values[j]*sr/sum(total_confirmed)
             else:
-                if isinstance(df.loc[i*self.len_data_4th].Province_State, float):
+                if isinstance(df.loc[i*n_each].Province_State, float):
                     recovered = recovered[recovered['Province/State'].isnull()]
                     recovered = recovered.iloc[0].loc[self.start_date:]
-                    recovered = recovered[:self.len_data_4th]
+                    recovered = recovered[:self.len_train ]
                 else:
                     recovered = recovered[recovered['Province/State']==province]
                     recovered = recovered.iloc[0].loc[self.start_date:]
-                    recovered = recovered[:self.len_data_4th]
+                    recovered = recovered[:self.len_train ]
 
             data = confirmed.values - recovered.values - death.values
 
@@ -174,9 +126,9 @@ class Learner(object):
                 idx = max(self.idx, next((i for i, x in enumerate(confirmed.values) if x), None) )
 
             len_submission = 43
-            max_limit_idx = self.len_data_4th- len_submission + self.predict_range
-            idx = min(max_limit_idx, idx) #len_data_4th-13 = self.len_data_4th- len_submission + predict_range = 84 - len_submission + 30 = 71
-            idx = min(71, idx)
+            max_limit_idx = n_each- len_submission + self.predict_range
+            idx = min(max_limit_idx, idx) #len_data_4th-13 = n_each- len_submission + predict_range = 84 - len_submission + 30 = 71
+
             s0_guess = max(confirmed.values)
             if s0_guess > 100000:
                 h_limit = s0_guess*2
@@ -187,7 +139,7 @@ class Learner(object):
                 l_limit = s0_guess/2
                 s0_grid_size = s0_guess
             else:
-                h_limit = s0_guess * 3
+                h_limit = s0_guess * 4
                 l_limit = s0_guess/2
                 s0_grid_size = s0_guess
             bounds=[(l_limit, h_limit),(0.00001, 0.0001), (0.001, 0.01), (0.001, 0.01)]
@@ -195,51 +147,50 @@ class Learner(object):
             i_0, r_0, d_0 = data[idx], recovered[idx], death.values[idx]
             #i_0, r_0, d_0 = max(data[idx],1), max(recovered[idx],1), max(death.values[idx],1)
 
-            rranges = (slice(bounds[0][0], bounds[0][1], s0_grid_size), slice(bounds[1][0], bounds[1][1], 0.00001), slice(bounds[2][0], bounds[2][1], 0.001), slice(bounds[3][0], bounds[3][1], 0.001))
+            rranges = (slice(bounds[0][0], bounds[0][1], s0_guess), slice(bounds[1][0], bounds[1][1], 0.00001), slice(bounds[2][0], bounds[2][1], 0.001), slice(bounds[3][0], bounds[3][1], 0.001))
             brute_args = (loss, rranges, (data[idx:], recovered.values[idx:], death.values[idx:], i_0, r_0, d_0))
-            #Args.append(Brute.remote(brute_args))
-            Args.append(brute_args)
+            Args.append(Brute.remote(brute_args))
+            #Args.append(brute_args)
 
         #Optimal = ray.get(Args)
 
+
         Optimal = []
-        for i in tqdm(range(216,224)):
+        for i in tqdm(range(40)):
             with Pool() as p:
-                start = time.time()
-                n = 1
-                country = df.loc[i*self.len_data_4th].Country_Region
-                print(country)
+                #start = time.time()
+                n = 8
                 optimal = p.map(Brute, Args[n*i:min((i+1)*n, n_areas)])
-                end = time.time()
-                print("brute time: ", end-start)
-                Optimal += optimal
+                #end = time.time()
+                #print("brute time: ", end-start)
+                Optimal.append(optimal)
 
 
         for i in tqdm(range(n_areas)):
-            country = df.loc[i*self.len_data_4th].Country_Region
-            province =  df.loc[i*self.len_data_4th].Province_State
-            confirmed = df[i*self.len_data_4th:(i+1)*self.len_data_4th].ConfirmedCases
-            death = df[i*self.len_data_4th:(i+1)*self.len_data_4th].Fatalities
+            country = df.loc[i*n_each].Country_Region
+            province =  df.loc[i*n_each].Province_State
+            confirmed = df[i*n_each:(i+1)*n_each].ConfirmedCases[:self.len_train ]
+            death = df[i*n_each:(i+1)*n_each].Fatalities[:self.len_train ]
             recovered = rec[rec['Country/Region'] == country]
             if country not in province_countries:
                 recovered = recovered.iloc[0].loc[self.start_date:]
-                recovered = recovered[:self.len_data_4th]
+                recovered = recovered[:self.len_train ]
             elif country in ['US', 'Canada']:
                 recovered = recovered.iloc[0].loc[self.start_date:]
-                recovered = recovered[:self.len_data_4th]
-                total_confirmed = total.loc[country].ConfirmedCases.values
+                recovered = recovered[:self.len_train ]
+                total_confirmed = total.loc[country].ConfirmedCases.values[:self.len_train ]
                 sr = sum(recovered.values)
-                for j in range(self.len_data_4th):
-                    recovered[j] = int(confirmed.values[j]*sr/sum(total_confirmed))
+                for j in range(self.len_train):
+                    recovered[j] = confirmed.values[j]*sr/sum(total_confirmed)
             else:
-                if isinstance(df.loc[i*self.len_data_4th].Province_State, float):
+                if isinstance(df.loc[i*n_each].Province_State, float):
                     recovered = recovered[recovered['Province/State'].isnull()]
                     recovered = recovered.iloc[0].loc[self.start_date:]
-                    recovered = recovered[:self.len_data_4th]
+                    recovered = recovered[:self.len_train ]
                 else:
                     recovered = recovered[recovered['Province/State']==province]
                     recovered = recovered.iloc[0].loc[self.start_date:]
-                    recovered = recovered[:self.len_data_4th]
+                    recovered = recovered[:self.len_train ]
 
             data = confirmed.values - recovered.values - death.values
 
@@ -249,25 +200,25 @@ class Learner(object):
                 idx = max(self.idx, next((i for i, x in enumerate(confirmed.values) if x), None) )
 
             len_submission = 43
-            max_limit_idx = self.len_data_4th - len_submission + self.predict_range
-            idx = min(max_limit_idx, idx) #len_data_4th-13 = self.len_data_4th- len_submission + predict_range = 84 - len_submission + 30 = 71
-            idx = min(71, idx)
+            max_limit_idx = n_each- len_submission + self.predict_range
+            idx = min(max_limit_idx, idx) #len_data_4th-13 = n_each- len_submission + predict_range = 84 - len_submission + 30 = 71
+
             optimal = Optimal[i]
             s_0, beta, gamma, mu = optimal[0]
             #optimal = brute(loss, rranges, args=(data[idx:], recovered.values[idx:], death.values[idx:], i_0, r_0, d_0), full_output=True, finish=fmin)
             #print("optimized s_0, beta, gamma, mu :", optimal[0])
             #print("mse:", optimal[1])
             #print(optimal[2].shape)
-            country = df.loc[i*self.len_data_4th].Country_Region
-            province = str(df.loc[i*self.len_data_4th].Province_State)
+            country = df.loc[i*n_each].Country_Region
+            province = str(df.loc[i*n_each].Province_State)
             dict[country+" "+province] = [s_0, beta, gamma, mu, optimal[1], optimal[1]/confirmed.values[-1]]
 
             #mu = max(mu, 0) # death rate can't be negative
             #start = time.time()
             if self.end:
                 new_index, extended_actual, extended_recovered, extended_death, prediction = self.predict_end(beta, gamma, mu, data[idx:], recovered[idx:], death[idx:], s_0, idx)
-                sub.ConfirmedCases[i*len_submission + 13:(i+1)*len_submission] = [round(e) for e in (prediction.y[1] + prediction.y[2]+ prediction.y[3])]
-                sub.Fatalities[i*len_submission + 13:(i+1)*len_submission] = [round(e) for e in (prediction.y[3])]
+                sub.ConfirmedCases[i*len_submission + self.overlap:(i+1)*len_submission] = [round(e) for e in (prediction.y[1] + prediction.y[2]+ prediction.y[3])]
+                sub.Fatalities[i*len_submission + self.overlap:(i+1)*len_submission] = [round(e) for e in (prediction.y[3])]
             else:
                 new_index, extended_actual, extended_recovered, extended_death, prediction = self.predict(beta, gamma, mu, data[idx:], recovered[idx:], death[idx:], s_0, i_0, r_0, d_0, idx)
                 sub.ConfirmedCases[i*len_submission:(i+1)*len_submission] = [round(e) for e in (prediction.y[1][-len_submission:] + prediction.y[2][-len_submission:]+ prediction.y[3][-len_submission:])]
@@ -286,6 +237,11 @@ class Learner(object):
             print(f"country={country}, s_0={s_0:.8f}, beta={beta:.8f}, gamma={gamma:.8f}, r_0:{(beta/gamma):.8f}, mu={mu:.8f}")
             fig.savefig(f"figs/{country}-{province}.png")
         sub = sub.astype(int)
+        sub = sub[['ForecastId', 'ConfirmedCases', 'Fatalities']]
+        train = pd.read_csv('data/train.csv')
+        for i in range(313):
+            sub.ConfirmedCases[43*i:self.overlap+43*i] = list(train.ConfirmedCases.values[(i+1)*n_each-self.overlap:(i+1)*n_each])
+            sub.Fatalities[43*i:self.overlap+43*i] = list(train.Fatalities.values[(i+1)*n_each-self.overlap:(i+1)*n_each])
         sub.to_csv(f'data/submission.csv')
         coef_df = pd.DataFrame.from_dict(dict)
         coef_df.to_csv(f'data/coef.csv')
@@ -311,12 +267,15 @@ def loss(point, data, recovered, death, i_0, r_0, d_0):
     #result = rmsle(Y, Y_pred) + max(0, -s_0)
     W = 0.8
     X = [(solution.y[1] - data), W*(solution.y[2] - recovered), (solution.y[3] - death)]
+    #mid = size//6
     mid = size//3
 
     result = 0
     for x in X:
         Y = [x[:mid], x[mid:mid*2], x[2*mid:]]
         result += sum([sum(Y[w]**2*(w+1)) for w in range(len(Y))])/6/size
+        #Y = [x[:mid], x[mid:mid*2], x[2*mid:3*mid], x[3*mid:4*mid], x[4*mid:5*mid], x[5*mid:]]
+        #result += sum([sum(Y[w]**2*(w+1)**1.5) for w in range(len(Y))])/43/size
     result = np.sqrt(np.sqrt(result))
     return result
 
@@ -339,10 +298,10 @@ def rmsle(y, y_pred):
 
 def main():
 
-    startdate, predict_range ,idx, i_0, r_0, d_0 = parse_arguments()
+    idx = parse_arguments()
 
 
-    learner = Learner(loss, startdate, predict_range, idx, i_0, r_0, d_0)
+    learner = Learner(loss, idx)
     learner.train()
         #except BaseException:
         #    print('WARNING: Problem processing ' + str(country) +
