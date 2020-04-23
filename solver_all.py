@@ -92,7 +92,7 @@ class Learner(object):
         dict = {}
         Args = []
         n_areas = 313
-        n_each = len(df)/313
+        n_each = int(len(df)/313)
         for i in range(n_areas):
             country = df.loc[i*n_each].Country_Region
             province =  df.loc[i*n_each].Province_State

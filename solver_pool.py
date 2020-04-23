@@ -90,8 +90,8 @@ class Learner(object):
         total = df.groupby(['Country_Region','Date']).sum()
         dict = {}
         Args = []
-        n_areas = 313
-        n_each = len(df)/313
+        n_areas = 8
+        n_each = int(len(df)/313)
         for i in range(n_areas):
             country = df.loc[i*n_each].Country_Region
             province =  df.loc[i*n_each].Province_State
@@ -149,8 +149,8 @@ class Learner(object):
 
             rranges = (slice(bounds[0][0], bounds[0][1], s0_guess), slice(bounds[1][0], bounds[1][1], 0.00001), slice(bounds[2][0], bounds[2][1], 0.001), slice(bounds[3][0], bounds[3][1], 0.001))
             brute_args = (loss, rranges, (data[idx:], recovered.values[idx:], death.values[idx:], i_0, r_0, d_0))
-            Args.append(Brute.remote(brute_args))
-            #Args.append(brute_args)
+            #Args.append(Brute.remote(brute_args))
+            Args.append(brute_args)
 
         #Optimal = ray.get(Args)
 
